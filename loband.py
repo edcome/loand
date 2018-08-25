@@ -16,20 +16,27 @@
 
 from tkinter import *
 from tkinter import filedialog as fd
-import os, re, glob
+import os
+import re
+import glob
+
 import pyodbc
 import csv
 
+import configparser
+
+from tkinter import messagebox
+
+import msaccessdb
+
 # import contextlib
 
+CONFIG_FILE = "settings.ini"
 REQ_COLS = 9  # required numbers columns
 
-dbname = r'd:\temp\entire\lob_and\paintdb.accdb'
+#dbname = r'd:\temp\entire\lob_and\paintdb.accdb'
 
 
-# dbname = r'c:\ed\Projects\Freelance\Discussed\LobAnd\2\paintDB.accdb'
-# dbname = ''
-# constr = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={0};".format(dbname)
 
 def is_prime(number):
     for element in range(2, number):
@@ -61,18 +68,21 @@ def prepareFolder():
 
 
 def selectBase():
-    global dbname
-    dbname = fd.askopenfilename(title="Select file", filetypes=(("MS Access files", "*.accdb"),))
-    text.insert(END, dbname + "\n")
+    # global dbname
+    # dbname = fd.askopenfilename(title="Select file", filetypes=(("MS Access files", "*.accdb"),))
+    base_path = fd.askopenfilename(title="Select file", filetypes=(("MS Access files", "*.accdb"),))
+    if len(base_path) > 0:
+        config["BASE"]["BASE_PATH"] = base_path
+    label1.config(text=config["BASE"]["BASE_PATH"])
 
 
 def importFile():
-    global dbname
-    if len(dbname):
+    base_path = config["BASE"]["BASE_PATH"]
+    if len(base_path):
         fname_in = fd.askopenfilename(title="Select file", filetypes=(("Prepared files", "*.res"),))
         if len(fname_in):
             try:
-                constr = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={0};".format(dbname)
+                constr = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={0};".format(base_path)
                 dbconn = pyodbc.connect(constr)
                 cur = dbconn.cursor()
                 import_file(fname_in, cur)
@@ -89,15 +99,15 @@ def importFile():
 
 
 def importFolder():
-    global dbname
-    if len(dbname):
+    base_path = config["BASE"]["BASE_PATH"]
+    if len(base_path):
         mypath = fd.askdirectory(title="Select folder")
         if mypath != "":
             mypath += "/"
             only_csv = glob.glob(mypath + "*.res")
             if len(only_csv):
                 try:
-                    constr = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={0};".format(dbname)
+                    constr = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={0};".format(base_path)
                     dbconn = pyodbc.connect(constr)
                     cur = dbconn.cursor()
                     for i in only_csv:
@@ -108,7 +118,6 @@ def importFolder():
 
 
 def prepare_file(fname_in):
-    # messagebox.showinfo("Info", "Process file...")
     text.insert(END, os.path.basename(fname_in) + "\n")
     mypath = os.path.splitext(fname_in)
     fname_out = mypath[0] + '.tmp'
@@ -219,15 +228,12 @@ def reorder_line(line, brand_list):
         messagebox.showerror("Error", str(len(lst)) + "  " + line)
         return ""
 
-    # if model is empty
-    # if lst[3] == "":
-    # return ""
+    # ignore lines where model field is empty
+    if lst[3] == "":
+        return ""
 
     prefix = ";".join(lst[:REQ_COLS])
     lst = lst[REQ_COLS:]
-
-    # if len(lst) == 0:
-    # print (line)
 
     for brand in brand_list:
         prefix += ";"
@@ -250,6 +256,7 @@ def import_file(fname, cur):
     text.insert(END, "import " + os.path.basename(fname) + "\n")
     tbMakeName = create_table(fname, cur)
     if len(tbMakeName):
+        createIndex(tbMakeName, cur)
         insert_table(fname, cur)
         text.insert(END, "import OK.\n")
 
@@ -320,6 +327,15 @@ def create_table(fname, cur):
         csvfile.close()
         return tbMakeName
 
+def createIndex(tbMakeName, cur):
+    sql = "CREATE INDEX " + tbMakeName + "Index ON " + tbMakeName + " (code);"
+    cur.execute(sql)
+    # dbconn.commit()
+    cur.commit()
+# CREATE INDEX индекс
+# ON таблица (поле [ASC|DESC][, поле [ASC|DESC], ...])
+# [WITH { PRIMARY | DISALLOW NULL | IGNORE NULL }]
+
 
 # def insert_table(tbName, data, cur):
 # sql = "INSERT INTO " + tbName + """ (id autoincrement CONSTRAINT MyIDConstraint PRIMARY KEY,
@@ -372,6 +388,134 @@ def insert_table(fname, cur):
     cur.executemany(sql, input_list)
     cur.commit()
 
+
+
+def getUniquePaintCode(cur):
+    sql = "SELECT DISTINCT code FROM tbAcura;"
+    cur.execute(sql)
+    return cur.fetchall()
+
+def getCarsInPaintCode(code, cur):
+    #TODO: move select field 'make' to another place. Select only one record !!!
+    sql = "SELECT model, paint_color_name, year, make FROM tbAcura WHERE code='" + code + "';"
+    cur.execute(sql)
+    return cur.fetchall()
+
+def makeHeaders():
+    base_path = config["BASE"]["BASE_PATH"]
+    if len(base_path):
+        try:
+            constr = "DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={0};".format(base_path)
+            dbconn = pyodbc.connect(constr)
+            cur = dbconn.cursor()
+            header_1 = {}
+            header_2 = {}
+            codes = getUniquePaintCode(cur)
+            # text.insert(END, type(codes))
+            # text.insert(END, "\n")
+            for code in codes:
+                models = {}
+                cars = getCarsInPaintCode(code[0], cur)
+                for car in cars:
+                    if not car[0] in models:
+                        models[car[0]] = []
+                    models[car[0]].append(car[2])
+
+                years = get_unique_years(models)
+                years.sort()
+                header = car[1] + " " + code[0] + " <> " + " ".join(years)
+
+                # add only last two digits of the year
+                for year in years:
+                    header += " " + year[-2:]
+
+                # add make UPCASE
+                header += " " + car[3].upper()
+
+                # add models
+                for key in models.keys():
+                    header += " " + key
+                header_1[code[0]] = header
+                # text.insert(END, str(len(header_1)))
+                # text.insert(END, "\n")
+
+                header = makeHeader_2(code[0], models)
+                header_2[code[0]] = header
+                # text.insert(END, header)
+                # text.insert(END, "\n")
+
+
+
+            # paint_color_name
+
+            # text.insert(END, header)
+            # text.insert(END, "\n")
+
+            # csv = make_result_csv(header_1, header_2, cur)
+            # text.insert(END, csv)
+            #     text.insert(END, "\n")
+            make_result_csv(header_1, header_2, cur)
+
+            messagebox.showinfo("Info", str(len(codes)))
+        # except:
+        #     pass
+        finally:
+            cur.close()
+            dbconn.close()
+
+
+def get_unique_years(models):
+    res = set()
+    for years in models.values():
+        res |= set(years)
+
+    return list(res)
+
+def makeHeader_2(code, models):
+    used_keys = []
+    header = ""
+    for key in models.keys():
+        if not key in used_keys:
+            s_years = set(models[key])
+            used_keys.append(key)
+            res = find_equ(models, used_keys, s_years)
+            if len(header) > 0:
+                header += " , "
+            header += " ".join(models[key]) + " " + key
+            if len(res) > 0:
+                header += " " + " ".join(res)
+                used_keys += res
+    return header
+
+def find_equ(models, used, s_years):
+    res = []
+    for key in models.keys():
+        if not key in used:
+            if s_years == set(models[key]):
+                res.append(key)
+    return res
+
+
+def make_result_csv(h1, h2, cur):
+    res = []
+    sql = "SELECT * FROM tbAcura;"
+    cur.execute(sql)
+    records = cur.fetchall()
+    try:
+        with open("acura_heads.csv", 'w') as csvfile:
+            #res.append(';'.join(t[0] for t in cur.description) + ";header_1;header_2")
+            csvfile.write(';'.join(t[0] for t in cur.description) + ";header_1;header_2" + "\n")
+            #print(res)
+            for rec in records:
+                rec[0] = str(rec[0])
+                # res.append(h1[rec[6]])
+                # res.append(h2[rec[6]])
+                csv_line = ";".join(rec) + ";" + h1[rec[6]] + ";" + h2[rec[6]] + "\n"
+                csvfile.write(csv_line)
+                # res.append(csv_line)
+            # return res
+    finally:
+        csvfile.close()
 
 # with open(fname, 'r') as csvfile:
 # reader = csv.DictReader(csvfile, delimiter=';', quoting=csv.QUOTE_NONE)
@@ -449,7 +593,59 @@ def insert_table(fname, cur):
 # # longest[i] = len(row[i])
 # f.close()
 
+
+
+
+def callback():
+    #if messagebox.askokcancel("Quit", "Do you really wish to quit?"):
+    config.write(open(conf_path, "w"))
+    root.destroy()
+
+
+# read settings
+conf_path = os.path.join(os.path.dirname(__file__), CONFIG_FILE)
+config = configparser.ConfigParser()
+config.read(conf_path)
+
+if not config.has_section("BASE"):
+    config.add_section("BASE")
+    config.set("BASE","BASE_PATH", "")
+
+# try:
+#     base_path = config["BASE"]["BASE_PATH"]
+# except KeyError:
+#     base_path = "???"
+
+
+
+class MyDialog:
+    def __init__(self, parent):
+        top = self.top = Toplevel(parent)
+        self.myLabel = Label(top, text='Enter file name below')
+        self.myLabel.pack()
+
+        self.myEntryBox = Entry(top)
+        self.myEntryBox.pack()
+        self.mySubmitButton = Button(top, text='Ok', command=self.send)
+        self.mySubmitButton.pack()
+
+    def send(self):
+        global username
+        username = self.myEntryBox.get()
+        self.top.destroy()
+
+
+def createBase():
+    # Create empty .accdb file
+    inputDialog = MyDialog(root)
+    root.wait_window(inputDialog.top)
+    print('Username: ', username)
+    #msaccessdb.create("new_paintdb.accdb")
+
 root = Tk()
+root.title("Service paintDB")
+# root['bg'] = '#aa00aa'
+# root.state('zoomed')
 menubar = Menu(root)
 
 filemenu = Menu(menubar, tearoff=0)
@@ -460,19 +656,36 @@ filemenu.add_command(label="Exit", command=root.quit)
 menubar.add_cascade(label="Prepare", menu=filemenu)
 
 editmenu = Menu(menubar, tearoff=0)
+editmenu.add_command(label="Create base", command=createBase)
 editmenu.add_command(label="Select base", command=selectBase)
 editmenu.add_command(label="Import file", command=importFile)
 editmenu.add_command(label="Import folder", command=importFolder)
 menubar.add_cascade(label="Base", menu=editmenu)
+
+
+helpmenu = Menu(menubar, tearoff=0)
+helpmenu.add_command(label="Open options", command=donothing)
+helpmenu.add_command(label="Make headers", command=makeHeaders)
+menubar.add_cascade(label="Options", menu=helpmenu)
+
 
 helpmenu = Menu(menubar, tearoff=0)
 helpmenu.add_command(label="Help Index", command=donothing)
 helpmenu.add_command(label="About...", command=donothing)
 menubar.add_cascade(label="Help", menu=helpmenu)
 
+f1 = Frame()
+f1.pack(side=TOP, expand=YES, fill=X)
+#label1 = Label(f1, width=80, text=config["BASE"]["BASE_PATH"], fg="#eee", bg='#0a0a0a')
+# label1 = Label(f1, width=80, textvariable=config["BASE"]["BASE_PATH"])
+label1 = Label(f1, width=80, text=config["BASE"]["BASE_PATH"])
+
+label1.pack(expand=YES, fill=X)
+# label1.pack(side=BOTTOM)
+
 f2 = Frame()
 f2.pack()
-text = Text(f2, width=50, height=25)
+text = Text(f2, width=80, height=25)
 # text.grid(columnspan=2)
 text.pack(side=LEFT)
 
@@ -487,4 +700,11 @@ scrollH.pack(side=BOTTOM, fill=X)
 text.config(xscrollcommand=scrollH.set)
 
 root.config(menu=menubar)
+
+
+
+
+root.protocol("WM_DELETE_WINDOW", callback)
+
+
 root.mainloop()
