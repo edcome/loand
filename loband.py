@@ -12,7 +12,12 @@
 # https://github.com/mkleehammer/pyodbc/issues/217
 # https://stackoverflow.com/questions/28397527/pyodbc-insert-into-from-a-list
 # https://younglinux.info/tkinter/text.php
-# 10-aug-2018 add scrollbar to Text widjet
+# 25-aug-2018 create search_line field
+#
+# 1. Создаем базу в каталоге этого скрипта. Имя базы вводим в диалоговом окне. Расширение .aссdb добавляется программно.
+# 2. Запускаем подготовку файлов. Файл .csv считывается, удаляются сдвиги
+#
+
 
 from tkinter import *
 from tkinter import filedialog as fd
@@ -35,7 +40,7 @@ CONFIG_FILE = "settings.ini"
 REQ_COLS = 9  # required numbers columns
 
 #dbname = r'd:\temp\entire\lob_and\paintdb.accdb'
-
+db_name = ""
 
 
 def is_prime(number):
@@ -410,6 +415,7 @@ def makeHeaders():
             cur = dbconn.cursor()
             header_1 = {}
             header_2 = {}
+            search_line = {}
             codes = getUniquePaintCode(cur)
             # text.insert(END, type(codes))
             # text.insert(END, "\n")
@@ -444,7 +450,7 @@ def makeHeaders():
                 # text.insert(END, header)
                 # text.insert(END, "\n")
 
-
+                search_line = makeSearch_line(header_1)
 
             # paint_color_name
 
@@ -486,6 +492,11 @@ def makeHeader_2(code, models):
                 header += " " + " ".join(res)
                 used_keys += res
     return header
+
+
+def makeSearch_line(header):
+    pass
+
 
 def find_equ(models, used, s_years):
     res = []
@@ -630,17 +641,26 @@ class MyDialog:
         self.mySubmitButton.pack()
 
     def send(self):
-        global username
-        username = self.myEntryBox.get()
+        global db_name
+        db_name = self.myEntryBox.get()
         self.top.destroy()
 
 
 def createBase():
     # Create empty .accdb file
+    global db_name
     inputDialog = MyDialog(root)
     root.wait_window(inputDialog.top)
-    print('Username: ', username)
-    #msaccessdb.create("new_paintdb.accdb")
+
+    base_path = ""
+    if len(db_name) > 0:
+        base_path = os.path.join(os.path.dirname(__file__), db_name + ".accdb")
+        # create DB in script dir
+        msaccessdb.create(base_path)
+        if not os.path.isfile(base_path):
+            base_path = ""
+    config["BASE"]["BASE_PATH"] = base_path
+    label1.config(text=config["BASE"]["BASE_PATH"])
 
 root = Tk()
 root.title("Service paintDB")
